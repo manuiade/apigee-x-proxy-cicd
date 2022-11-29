@@ -4,6 +4,7 @@
 ## Prerequirements
 
 - You have a GCP Project with an evaluation Apigee X Organization setup
+- You have commited this code in a GitHub repo connected to your project's Cloud Build: https://cloud.google.com/build/docs/automating-builds/github/connect-repo-github
 
 ## Environemnt variables
 ```
