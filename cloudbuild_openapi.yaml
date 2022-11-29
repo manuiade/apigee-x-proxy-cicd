@@ -1,0 +1,68 @@
+steps:
+
+# This step copy the uploaded object locally
+- name: 'gcr.io/cloud-builders/gcloud'
+  id: Get spec file
+  entrypoint: '/bin/sh'
+  args:
+  - -c
+  - >
+    gsutil cp gs://${_BUCKET_ID}/${_OBJECT_ID} .
+
+# This step  clone the openapi2apigee
+- name: 'gcr.io/cloud-builders/gcloud'
+  id: Clone openapi2apigee tool
+  entrypoint: '/bin/sh'
+  args:
+  - -c
+  - >
+    git clone https://github.com/anil614sagar/openapi2apigee.git
+
+# This steps install the openapi2apigee node package
+- name: 'node:lts'
+  id: nmp install
+  entrypoint: /bin/bash
+  args:
+  - -c
+  - npm install --prefix /workspace -g openapi2apigee
+
+# This step use the openapi2apigee tool to convert the openapi.yaml in an apigee bundle
+- name: 'node:lts'
+  id: Use openapi2apigee
+  entrypoint: /bin/bash
+  args:
+  - -c
+  - >
+    ./bin/openapi2apigee generateApi $(basename ${_OBJECT_ID} .yaml) -s ./$(basename ${_OBJECT_ID}) -d ./
+
+# This step creates a new apigee revision (new proxy if no revision exists) from the generated apigee zip bundle
+- name: 'gcr.io/cloud-builders/gcloud'
+  id: Create new apigee revision
+  entrypoint: /bin/bash
+  args:
+  - -c
+  - >
+    apt update && apt install -y jq && curl -X POST \
+      -H "Authorization: Bearer $(gcloud auth print-access-token)" \
+      -H "Content-Type: multipart/form-data" \
+      -F "file=@$(basename ${_OBJECT_ID} .yaml)/apiproxy.zip" \
+      "https://apigee.googleapis.com/v1/organizations/$PROJECT_ID/apis?name=$(basename ${_OBJECT_ID} .yaml)&action=import" | jq --raw-output .revision > revision.txt
+
+
+# OPTIONAL: Deploy lates apigee revision (here apigee environment is hardcoded for now)
+- name: 'gcr.io/cloud-builders/gcloud'
+  id: Deploy latest apigee revision
+  entrypoint: /bin/bash
+  args:
+  - -c
+  - >
+    curl -X POST \
+      -H "Authorization: Bearer $(gcloud auth print-access-token)" \
+      -H "Content-Type: application/json; charset=utf-8" \
+      "https://apigee.googleapis.com/v1/organizations/$PROJECT_ID/environments/dev/apis/$(basename ${_OBJECT_ID} .yaml)/revisions/$(cat revision.txt)/deployments?override=true" --silent
+
+
+timeout: 1200s
+
+options:
+  logging: CLOUD_LOGGING_ONLY

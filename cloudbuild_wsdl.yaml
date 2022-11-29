@@ -1,0 +1,68 @@
+steps:
+
+# This step copy the uploaded object locally
+- name: 'gcr.io/cloud-builders/gcloud'
+  id: Get spec file
+  entrypoint: '/bin/sh'
+  args:
+  - -c
+  - >
+    gsutil cp gs://${_BUCKET_ID}/${_OBJECT_ID} .
+
+# This step  clone the wsdl2apigee
+- name: 'gcr.io/cloud-builders/gcloud'
+  id: Clone wsdl2apigee tool
+  entrypoint: '/bin/sh'
+  args:
+  - -c
+  - >
+    git clone https://github.com/apigee/wsdl2apigee
+
+# This steps install the wsdl2apigee node package
+- name: 'maven'
+  id: Maven install
+  entrypoint: /bin/bash
+  args:
+  - -c
+  - cd wsdl2apigee && mvn install
+
+# This step use the wsdl2apigee tool to convert the wsdl file in an apigee bundle
+- name: 'openjdk:11-jre-slim'
+  id: Use wsdl2apigee
+  entrypoint: /bin/bash
+  args:
+  - -c
+  - >
+    java -jar wsdl2apigee/target/wsdl2apigee-1.0.0-jar-with-dependencies.jar -wsdl=./$(basename ${_OBJECT_ID})
+
+# This step creates a new apigee revision (new proxy if no revision exists) from the generated apigee zip bundle
+- name: 'gcr.io/cloud-builders/gcloud'
+  id: Create new apigee revision
+  entrypoint: /bin/bash
+  args:
+  - -c
+  - >
+    apt update && apt install -y jq && curl -X POST \
+      -H "Authorization: Bearer $(gcloud auth print-access-token)" \
+      -H "Content-Type: multipart/form-data" \
+      -F "file=@$(basename ${_OBJECT_ID} .wsdl).zip" \
+      "https://apigee.googleapis.com/v1/organizations/$PROJECT_ID/apis?name=$(basename ${_OBJECT_ID} .wsdl)&action=import" | jq --raw-output .revision > revision.txt
+
+
+# OPTIONAL: Deploy lates apigee revision (here apigee environment is hardcoded for now)
+- name: 'gcr.io/cloud-builders/gcloud'
+  id: Deploy latest apigee revision
+  entrypoint: /bin/bash
+  args:
+  - -c
+  - >
+    curl -X POST \
+      -H "Authorization: Bearer $(gcloud auth print-access-token)" \
+      -H "Content-Type: application/json; charset=utf-8" \
+      "https://apigee.googleapis.com/v1/organizations/$PROJECT_ID/environments/dev/apis/$(basename ${_OBJECT_ID} .wsdl)/revisions/$(cat revision.txt)/deployments?override=true" --silent
+
+
+timeout: 1200s
+
+options:
+  logging: CLOUD_LOGGING_ONLY
